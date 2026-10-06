@@ -10,17 +10,18 @@ ADMIN_ID = int(os.environ['ADMIN_ID'])
 QR_PATH = os.getenv('PAYMENT_QR_PATH', 'paytm_qr.png')
 PRICE, DAYS = 100, 30
 
-# Render provides DATABASE_URL for PostgreSQL; fallback to SQLite for local testing
 DATABASE_URL = os.getenv('DATABASE_URL')
 DB = os.getenv('DB_PATH', 'bot.db')
 
-# Webhook config
-RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL')  # Render auto-provides this
+RENDER_EXTERNAL_URL = os.getenv('RENDER_EXTERNAL_URL')
 PORT = int(os.getenv('PORT', 10000))
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 
+# 🔥 Aapka naam
+DEVELOPER_NAME = "DEVELOPED BY SUMIT KUMAR"
 
-# ---------- DB LAYER (PostgreSQL or SQLite) ----------
+
+# ---------- DB LAYER ----------
 class DBWrapper:
     def __init__(self):
         self.is_pg = bool(DATABASE_URL)
@@ -30,7 +31,6 @@ class DBWrapper:
             import psycopg2
             from psycopg2.extras import RealDictCursor
             url = DATABASE_URL
-            # Render gives postgres:// but psycopg2 needs postgresql://
             if url.startswith('postgres://'):
                 url = url.replace('postgres://', 'postgresql://', 1)
             conn = psycopg2.connect(url, cursor_factory=RealDictCursor)
@@ -41,7 +41,6 @@ class DBWrapper:
             return c
 
     def param(self, q):
-        """Convert ? placeholders to %s for PostgreSQL."""
         return q.replace('?', '%s') if self.is_pg else q
 
     def init(self):
@@ -113,6 +112,18 @@ def ensure(u):
     c.close()
 
 
+def ensure_by_id(uid):
+    c = conn()
+    cur = c.cursor()
+    q = '''INSERT INTO users(user_id, username, first_name, wallet, premium_until)
+           VALUES(?,?,?,0,NULL)
+           ON CONFLICT(user_id) DO NOTHING'''
+    cur.execute(db.param(q), (uid, '', ''))
+    c.commit()
+    cur.close()
+    c.close()
+
+
 def user(uid):
     c = conn()
     cur = c.cursor()
@@ -130,7 +141,6 @@ def active(r):
         pu = r['premium_until']
         if isinstance(pu, str):
             return datetime.fromisoformat(pu) > now()
-        # PostgreSQL returns datetime object
         if pu.tzinfo is None:
             pu = pu.replace(tzinfo=timezone.utc)
         return pu > now()
@@ -139,7 +149,6 @@ def active(r):
 
 
 def fmt_dt(val):
-    """Format datetime for display."""
     if isinstance(val, str):
         dt = datetime.fromisoformat(val)
     else:
@@ -149,13 +158,44 @@ def fmt_dt(val):
     return dt.astimezone().strftime('%d %b %Y, %I:%M %p')
 
 
+async def premium_check_silent(uid):
+    ensure_by_id(uid)
+    r = user(uid)
+    return active(r)
+
+
+# ---------- WATERMARK FILTER ----------
+def clean_response(text):
+    lines = text.split('\n')
+    clean_lines = []
+    skip_keywords = [
+        'developer', 'priyanshu', 'gupta', 'channel',
+        't.me', 'priyanshuexploits', '@priyanshu',
+        '👨‍💻', '📢', '❤️'
+    ]
+    for line in lines:
+        low = line.lower().strip()
+        if any(kw in low for kw in skip_keywords):
+            continue
+        clean_lines.append(line)
+    text = '\n'.join(clean_lines).strip()
+    while '\n\n\n' in text:
+        text = text.replace('\n\n\n', '\n\n')
+    return text
+
+
+def add_watermark(text):
+    return text + f"\n\n━━━━━━━━━━━━━━━━━━━━\n👨‍💻 {DEVELOPER_NAME}\n━━━━━━━━━━━━━━━━━━━━"
+
+
 # ---------- KEYBOARDS ----------
 def kb(uid):
     x = [
         [InlineKeyboardButton('💎 Premium ₹100 / 30 Days', callback_data='premium'),
          InlineKeyboardButton('💰 Wallet', callback_data='wallet')],
         [InlineKeyboardButton('💳 Pay ₹100 / Submit UTR', callback_data='pay'),
-         InlineKeyboardButton('📊 Status', callback_data='status')]
+         InlineKeyboardButton('📊 Status', callback_data='status')],
+        [InlineKeyboardButton('🔍 Lookup Services', callback_data='lookup_menu')]
     ]
     if uid == ADMIN_ID:
         x.append([InlineKeyboardButton('👑 Admin Panel', callback_data='admin')])
@@ -177,7 +217,14 @@ async def home(update, context):
     exp = '❌ Premium inactive'
     if active(r):
         exp = f"✅ Premium active\nExpiry: {fmt_dt(r['premium_until'])}"
-    text = f"👋 Hi {u.first_name or 'User'}!\n\n💰 Wallet: ₹{r['wallet']}\n{exp}\n\nUse the buttons below. Premium is ₹100 for 30 days."
+    text = (
+        f"👋 Hi {u.first_name or 'User'}!\n\n"
+        f"💰 Wallet: ₹{r['wallet']}\n{exp}\n\n"
+        f"Use the buttons below. Premium is ₹100 for 30 days.\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👨‍💻 {DEVELOPER_NAME}\n"
+        f"━━━━━━━━━━━━━━━━━━━━"
+    )
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=kb(u.id))
     else:
@@ -217,7 +264,102 @@ async def utr_start(update, context):
     await q.message.reply_text('🧾 Send your UTR / transaction reference now.\n\nDo not send OTP, password, card details or any secret.')
 
 
+# ---------- LOOKUP MENU ----------
+async def lookup_menu(update, context):
+    q = update.callback_query
+    await q.answer()
+    k = InlineKeyboardMarkup([
+        [InlineKeyboardButton('📱 Number Lookup', callback_data='lookup_num')],
+        [InlineKeyboardButton('🚗 Vahan Lookup', callback_data='lookup_vahan')],
+        [InlineKeyboardButton('🏦 IFSC Lookup', callback_data='lookup_ifsc')],
+        [InlineKeyboardButton('⬅️ Back', callback_data='home')]
+    ])
+    await q.edit_message_text(
+        '🔍 *Lookup Services*\n\nChoose a service below:\n\n'
+        '⚠️ Premium required for all lookups.',
+        reply_markup=k,
+        parse_mode='Markdown'
+    )
+
+
+async def lookup_num_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    if not await premium_check_silent(q.from_user.id):
+        await q.edit_message_text(
+            '🔒 Premium required.\n\nUse /start → Pay ₹100 / Submit UTR.',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
+        )
+        return
+    context.user_data['lookup_type'] = 'num'
+    await q.edit_message_text(
+        '📱 *Number Lookup*\n\nSend the mobile number (10 digits):',
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='lookup_menu')]])
+    )
+
+
+async def lookup_vahan_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    if not await premium_check_silent(q.from_user.id):
+        await q.edit_message_text(
+            '🔒 Premium required.\n\nUse /start → Pay ₹100 / Submit UTR.',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
+        )
+        return
+    context.user_data['lookup_type'] = 'vahan'
+    await q.edit_message_text(
+        '🚗 *Vahan Lookup*\n\nSend the vehicle RC number (e.g., DL01AB1234):',
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='lookup_menu')]])
+    )
+
+
+async def lookup_ifsc_start(update, context):
+    q = update.callback_query
+    await q.answer()
+    if not await premium_check_silent(q.from_user.id):
+        await q.edit_message_text(
+            '🔒 Premium required.\n\nUse /start → Pay ₹100 / Submit UTR.',
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
+        )
+        return
+    context.user_data['lookup_type'] = 'ifsc'
+    await q.edit_message_text(
+        '🏦 *IFSC Lookup*\n\nSend the IFSC code (e.g., SBIN0001234):',
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='lookup_menu')]])
+    )
+
+
+# ---------- TEXT MESSAGE HANDLER ----------
 async def text_msg(update, context):
+    # ---- LOOKUP TYPE CHECK ----
+    lookup_type = context.user_data.get('lookup_type')
+    if lookup_type:
+        context.user_data['lookup_type'] = None
+        v = update.message.text.strip()
+        urls = {
+            'num': f'https://thanksfor100user.vercel.app/num?number={v}',
+            'vahan': f'https://priyanshu-pied-xi.vercel.app/api/vahan?rc={v}&format=card',
+            'ifsc': f'https://priyanshuexploits.vercel.app/api/ifsc/{v}?format=text'
+        }
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(urls[lookup_type], timeout=20) as r:
+                    text = await r.text()
+                    text = clean_response(text)
+                    text = add_watermark(text)
+                    await update.message.reply_text(
+                        text[:4000],
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
+                    )
+        except Exception as e:
+            await update.message.reply_text(f'Error: {e}')
+        return
+
+    # ---- UTR CHECK ----
     if not context.user_data.get('utr'):
         return
     u = update.effective_user
@@ -265,6 +407,7 @@ async def text_msg(update, context):
         pass
 
 
+# ---------- WALLET / PREMIUM ----------
 async def wallet(update, context):
     q = update.callback_query
     await q.answer()
@@ -315,7 +458,8 @@ async def buy(update, context):
     cur.close()
     c.close()
     await q.edit_message_text(
-        f"🎉 Premium activated!\n\n💎 30 days\n📅 Expiry: {fmt_dt(expiry)}\n💰 Wallet left: ₹{r['wallet']-PRICE}",
+        f"🎉 Premium activated!\n\n💎 30 days\n📅 Expiry: {fmt_dt(expiry)}\n💰 Wallet left: ₹{r['wallet']-PRICE}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n👨‍💻 {DEVELOPER_NAME}\n━━━━━━━━━━━━━━━━━━━━",
         reply_markup=kb(q.from_user.id)
     )
 
@@ -333,7 +477,8 @@ async def premium(update):
     return True
 
 
-async def lookup(update, context, kind):
+# ---------- SLASH COMMANDS ----------
+async def lookup_cmd(update, context, kind):
     if not await premium(update):
         return
     if not context.args:
@@ -348,23 +493,27 @@ async def lookup(update, context, kind):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(urls[kind], timeout=20) as r:
-                await update.message.reply_text((await r.text())[:4000])
+                text = await r.text()
+                text = clean_response(text)
+                text = add_watermark(text)
+                await update.message.reply_text(text[:4000])
     except Exception as e:
         await update.message.reply_text(f'Error: {e}')
 
 
 async def num(update, context):
-    await lookup(update, context, 'num')
+    await lookup_cmd(update, context, 'num')
 
 
 async def vahan(update, context):
-    await lookup(update, context, 'vahan')
+    await lookup_cmd(update, context, 'vahan')
 
 
 async def ifsc(update, context):
-    await lookup(update, context, 'ifsc')
+    await lookup_cmd(update, context, 'ifsc')
 
 
+# ---------- ADMIN ----------
 async def admin(update, context):
     q = update.callback_query
     await q.answer()
@@ -467,6 +616,7 @@ async def decision(update, context):
         pass
 
 
+# ---------- CALLBACK ROUTER ----------
 async def callbacks(update, context):
     d = update.callback_query.data
     if d == 'home':
@@ -500,11 +650,19 @@ async def callbacks(update, context):
         await pending(update, context)
     elif d == 'users':
         await users(update, context)
+    elif d == 'lookup_menu':
+        await lookup_menu(update, context)
+    elif d == 'lookup_num':
+        await lookup_num_start(update, context)
+    elif d == 'lookup_vahan':
+        await lookup_vahan_start(update, context)
+    elif d == 'lookup_ifsc':
+        await lookup_ifsc_start(update, context)
     elif d.startswith('approve:') or d.startswith('reject:'):
         await decision(update, context)
 
 
-# ---------- HEALTH CHECK SERVER (for Render) ----------
+# ---------- HEALTH CHECK SERVER ----------
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
@@ -531,16 +689,20 @@ def main():
     db.init()
     app = Application.builder().token(TOKEN).build()
 
+    # Slash commands
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('status', status))
     app.add_handler(CommandHandler('num', num))
     app.add_handler(CommandHandler('vahan', vahan))
     app.add_handler(CommandHandler('ifsc', ifsc))
+
+    # Callback buttons
     app.add_handler(CallbackQueryHandler(callbacks))
+
+    # Text messages
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_msg))
 
     if RENDER_EXTERNAL_URL:
-        # Webhook mode (Render)
         print(f'Starting webhook on {RENDER_EXTERNAL_URL}{WEBHOOK_PATH}')
         app.run_webhook(
             listen='0.0.0.0',
@@ -550,7 +712,6 @@ def main():
             drop_pending_updates=True
         )
     else:
-        # Local testing: polling mode
         print('RENDER_EXTERNAL_URL not set, running in polling mode (local only)')
         app.run_polling()
 
