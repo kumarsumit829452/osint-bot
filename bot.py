@@ -300,7 +300,6 @@ async def bomber_start(update, context):
 
 # ==================== TEXT MESSAGE (main handler) ====================
 async def text_msg(update, context):
-    # register user
     register_user(update.effective_user)
 
     # ---- BOMBER ----
@@ -315,8 +314,7 @@ async def text_msg(update, context):
             return
 
         processing = await update.message.reply_text(
-            f'💥 *Bombing started...*\n\n📱 Number: `{number}`\n⏳ Please wait...',
-            parse_mode='Markdown'
+            f'💥 Bombing started...\n\n📱 Number: {number}\n⏳ Please wait...'
         )
 
         url = f'https://rohithost.myvipsite.fun/Bomber/?number={number}'
@@ -329,30 +327,27 @@ async def text_msg(update, context):
                     clean = clean_response(clean)
                     clean = add_watermark(clean)
 
-                    # agar HTML ke baad kuch meaningful nahi bacha
                     if len(clean.strip()) < 100:
                         final = (
-                            f'✅ *Bombing initiated*\n\n'
-                            f'📱 Number: `{number}`\n'
+                            f'✅ Bombing initiated\n\n'
+                            f'📱 Number: {number}\n'
                             f'💥 Status: Running\n'
                             f'⏱️ Duration: ~10 minutes\n\n'
-                            f'_Server is sending SMS in background._'
+                            f'Server is sending SMS in background.'
                         )
                     else:
                         final = clean[:4000]
 
                     await processing.edit_text(
                         final,
-                        parse_mode='Markdown',
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
                     )
         except asyncio.TimeoutError:
             await processing.edit_text(
-                f'⏱️ *Bombing in progress*\n\n'
-                f'📱 Number: `{number}`\n'
+                f'⏱️ Bombing in progress\n\n'
+                f'📱 Number: {number}\n'
                 f'💥 Server is sending SMS...\n'
-                f'_(Timeout — server may still be running)_',
-                parse_mode='Markdown',
+                f'(Timeout — server may still be running)',
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
             )
         except Exception as e:
@@ -405,9 +400,8 @@ async def admin(update, context):
     if q.from_user.id != ADMIN_ID:
         return
     await q.edit_message_text(
-        f'👑 *Admin Panel*\n\nTotal Users: *{user_count()}*',
-        reply_markup=admin_kb(),
-        parse_mode='Markdown'
+        f'👑 Admin Panel\n\nTotal Users: {user_count()}',
+        reply_markup=admin_kb()
     )
 
 
@@ -423,25 +417,24 @@ async def users_list(update, context):
         return
 
     await q.edit_message_text(
-        f'👥 *Last 50 Users* (Total: {user_count()})',
-        parse_mode='Markdown',
+        f'👥 Last 50 Users (Total: {user_count()})',
         reply_markup=admin_kb()
     )
 
     for r in rows:
         uname = f"@{r['username']}" if r['username'] else "(no username)"
         text = (
-            f"👤 *{r['first_name'] or ''} {r['last_name'] or ''}*\n"
-            f"📛 {uname}\n"
-            f"🆔 `{r['user_id']}`\n"
-            f"🌐 {r['language_code'] or 'unknown'}\n"
-            f"💎 Premium: {'✅' if r['is_premium'] else '❌'}\n"
+            f"👤 Name: {r['first_name'] or ''} {r['last_name'] or ''}\n"
+            f"📛 Username: {uname}\n"
+            f"🆔 User ID: {r['user_id']}\n"
+            f"🌐 Language: {r['language_code'] or 'unknown'}\n"
+            f"💎 Premium: {'Yes' if r['is_premium'] else 'No'}\n"
             f"📩 Messages: {r['msg_count']}\n"
             f"🕐 First seen: {r['first_seen'][:19]}\n"
             f"🕐 Last seen: {r['last_seen'][:19]}"
         )
         try:
-            await context.bot.send_message(ADMIN_ID, text, parse_mode='Markdown')
+            await context.bot.send_message(ADMIN_ID, text)
         except Exception:
             pass
 
@@ -452,9 +445,8 @@ async def stats(update, context):
     if q.from_user.id != ADMIN_ID:
         return
     await q.edit_message_text(
-        f'📊 *Bot Statistics*\n\n👥 Total Users: *{user_count()}*',
-        reply_markup=admin_kb(),
-        parse_mode='Markdown'
+        f'📊 Bot Statistics\n\n👥 Total Users: {user_count()}',
+        reply_markup=admin_kb()
     )
 
 
