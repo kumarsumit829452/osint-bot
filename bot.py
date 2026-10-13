@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import asyncio
 from datetime import datetime, timezone
@@ -17,6 +18,23 @@ WEBHOOK_PATH = f"/webhook/{TOKEN}"
 DB_PATH = os.getenv('DB_PATH', 'bot.db')
 
 DEVELOPER_NAME = "DEVELOPED BY SUMIT KUMAR"
+
+
+# ==================== HTML STRIPPER ====================
+def strip_html(html):
+    """HTML tags, scripts, styles — sab remove karo"""
+    html = re.sub(r'<script.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<style.*?</style>', '', html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r'<[^>]+>', '', html)
+    html = html.replace('&nbsp;', ' ')
+    html = html.replace('&amp;', '&')
+    html = html.replace('&lt;', '<')
+    html = html.replace('&gt;', '>')
+    html = html.replace('&quot;', '"')
+    html = html.replace('&#39;', "'")
+    html = re.sub(r'\n\s*\n', '\n', html)
+    html = re.sub(r'[ \t]+', ' ', html)
+    return html.strip()
 
 
 # ==================== DATABASE LAYER ====================
@@ -295,19 +313,50 @@ async def text_msg(update, context):
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
             )
             return
+
+        processing = await update.message.reply_text(
+            f'💥 *Bombing started...*\n\n📱 Number: `{number}`\n⏳ Please wait...',
+            parse_mode='Markdown'
+        )
+
         url = f'https://rohithost.myvipsite.fun/Bomber/?number={number}'
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(url, timeout=30) as r:
-                    text = await r.text()
-                    text = clean_response(text)
-                    text = add_watermark(text)
-                    await update.message.reply_text(
-                        text[:4000],
+            timeout = aiohttp.ClientTimeout(total=45)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(url) as r:
+                    raw = await r.text()
+                    clean = strip_html(raw)
+                    clean = clean_response(clean)
+                    clean = add_watermark(clean)
+
+                    # agar HTML ke baad kuch meaningful nahi bacha
+                    if len(clean.strip()) < 100:
+                        final = (
+                            f'✅ *Bombing initiated*\n\n'
+                            f'📱 Number: `{number}`\n'
+                            f'💥 Status: Running\n'
+                            f'⏱️ Duration: ~10 minutes\n\n'
+                            f'_Server is sending SMS in background._'
+                        )
+                    else:
+                        final = clean[:4000]
+
+                    await processing.edit_text(
+                        final,
+                        parse_mode='Markdown',
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
                     )
+        except asyncio.TimeoutError:
+            await processing.edit_text(
+                f'⏱️ *Bombing in progress*\n\n'
+                f'📱 Number: `{number}`\n'
+                f'💥 Server is sending SMS...\n'
+                f'_(Timeout — server may still be running)_',
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
+            )
         except Exception as e:
-            await update.message.reply_text(
+            await processing.edit_text(
                 f'❌ Error: {e}',
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
             )
@@ -325,8 +374,9 @@ async def text_msg(update, context):
             'aadhaar': f'https://aadhar-xi.vercel.app/api/lookup?id={v}&format=card'
         }
         try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get(urls[lookup_type], timeout=25) as r:
+            timeout = aiohttp.ClientTimeout(total=25)
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(urls[lookup_type]) as r:
                     text = await r.text()
                     text = clean_response(text)
                     text = add_watermark(text)
@@ -456,9 +506,7 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
-    # only /start command
     app.add_handler(CommandHandler('start', start))
-
     app.add_handler(CallbackQueryHandler(callbacks))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_msg))
 
