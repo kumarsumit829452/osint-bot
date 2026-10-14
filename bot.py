@@ -109,7 +109,6 @@ def register_user(u):
             FREE_CREDITS,
             now_iso(), now_iso()
         ))
-        # free credit history
         cur.execute('''
             INSERT INTO credit_history(user_id, amount, reason, added_by, created_at)
             VALUES(?,?,?,?,?)
@@ -189,11 +188,9 @@ def user_count():
 
 
 def find_user_by_username_or_id(query):
-    """username ya user_id se user dhundho"""
     c = db_conn()
     cur = c.cursor()
-    
-    # try as user_id
+
     try:
         uid = int(query.strip())
         cur.execute('SELECT * FROM users WHERE user_id=?', (uid,))
@@ -204,8 +201,7 @@ def find_user_by_username_or_id(query):
             return r
     except ValueError:
         pass
-    
-    # try as username
+
     uname = query.strip().lstrip('@').lower()
     cur.execute("SELECT * FROM users WHERE LOWER(username)=?", (uname,))
     r = cur.fetchone()
@@ -328,7 +324,7 @@ async def wallet_menu(update, context):
     await q.answer()
     u = q.from_user
     credits = get_credits(u.id)
-    
+
     text = (
         f"💰 WALLET\n\n"
         f"👤 {u.first_name or 'User'}\n"
@@ -347,30 +343,27 @@ async def credit_history(update, context):
     q = update.callback_query
     await q.answer()
     u = q.from_user
-    
+
     c = db_conn()
     cur = c.cursor()
     cur.execute('SELECT * FROM credit_history WHERE user_id=? ORDER BY id DESC LIMIT 20', (u.id,))
     rows = cur.fetchall()
     cur.close()
     c.close()
-    
+
     if not rows:
-        await q.edit_message_text(
-            '📜 No credit history yet.',
-            reply_markup=wallet_kb()
-        )
+        await q.edit_message_text('📜 No credit history yet.', reply_markup=wallet_kb())
         return
-    
+
     text = '📜 Credit History (Last 20)\n\n'
     for r in rows:
         amount = r['amount']
         sign = '+' if amount >= 0 else ''
         text += f"{sign}{amount} • {r['reason']}\n"
         text += f"   {r['created_at'][:19]}\n\n"
-    
+
     text = text[:4000] + f"\n━━━━━━━━━━━━━━━━━━━━\n👨‍💻 {DEVELOPER_NAME}\n━━━━━━━━━━━━━━━━━━━━"
-    
+
     await q.edit_message_text(text, reply_markup=wallet_kb())
 
 
@@ -379,14 +372,12 @@ async def lookup_menu(update, context):
     q = update.callback_query
     await q.answer()
     await q.edit_message_text(
-        '🔍 Lookup Services\n\nChoose a service:\n\n'
-        f'Each lookup costs 1 credit.',
+        '🔍 Lookup Services\n\nChoose a service:\n\nEach lookup costs 1 credit.',
         reply_markup=lookup_kb()
     )
 
 
 async def check_credits_or_warn(q, user_id):
-    """Check if user has credits. Return True if OK."""
     credits = get_credits(user_id)
     if credits <= 0:
         await q.edit_message_text(
@@ -469,9 +460,84 @@ async def bomber_start(update, context):
     )
 
 
+# ==================== ADD CREDITS PROCESS ====================
+async def addcredits_process(update, context, text):
+    step = context.user_data.get('addcredits_step')
+
+    if step == 'user':
+        u = find_user_by_username_or_id(text)
+        if not u:
+            await update.message.reply_text(
+                '❌ User not found. Try again or send /start to cancel.'
+            )
+            return
+
+        context.user_data['addcredits_user'] = u['user_id']
+        context.user_data['addcredits_step'] = 'amount'
+
+        await update.message.reply_text(
+            f"✅ User found:\n\n"
+            f"👤 {u['first_name'] or ''} {u['last_name'] or ''}\n"
+            f"📛 @{u['username'] or 'no_username'}\n"
+            f"🆔 {u['user_id']}\n"
+            f"💰 Current Credits: {u['credits']}\n\n"
+            f"Step 2: Send the amount of credits to add.\n"
+            f"Example: 50 or 100"
+        )
+        return
+
+    if step == 'amount':
+        try:
+            amount = int(text.strip())
+            if amount <= 0 or amount > 100000:
+                raise ValueError()
+        except ValueError:
+            await update.message.reply_text('❌ Invalid amount. Send a number between 1 and 100000.')
+            return
+
+        uid = context.user_data['addcredits_user']
+        add_credits(uid, amount, 'Added by admin', added_by=ADMIN_ID)
+
+        u = get_user(uid)
+        uname = f"@{u['username']}" if u['username'] else "no_username"
+
+        await update.message.reply_text(
+            f"✅ Credits Added\n\n"
+            f"👤 {u['first_name'] or ''} {u['last_name'] or ''}\n"
+            f"📛 {uname}\n"
+            f"🆔 {uid}\n"
+            f"➕ Added: {amount}\n"
+            f"💰 New Balance: {u['credits']}\n\n"
+            f"User ko notification bhej diya.",
+            reply_markup=admin_kb()
+        )
+
+        try:
+            await context.bot.send_message(
+                uid,
+                f"💰 Credits Added!\n\n"
+                f"➕ {amount} credits added to your wallet.\n"
+                f"💳 New Balance: {u['credits']}\n\n"
+                f"Use /start to access services.",
+                reply_markup=kb(uid)
+            )
+        except Exception:
+            pass
+
+        context.user_data['addcredits_step'] = None
+        context.user_data['addcredits_user'] = None
+        context.user_data['addcredits_amount'] = None
+        return
+
+
 # ==================== TEXT MESSAGE (main handler) ====================
 async def text_msg(update, context):
     register_user(update.effective_user)
+
+    # ---- ADD CREDITS (ADMIN) ----
+    if update.effective_user.id == ADMIN_ID and context.user_data.get('addcredits_step'):
+        await addcredits_process(update, context, update.message.text.strip())
+        return
 
     # ---- BOMBER ----
     if context.user_data.get('bomber'):
@@ -519,8 +585,7 @@ async def text_msg(update, context):
         context.user_data['lookup_type'] = None
         v = update.message.text.strip()
         uid = update.effective_user.id
-        
-        # check credits
+
         credits = get_credits(uid)
         if credits <= 0:
             await update.message.reply_text(
@@ -532,7 +597,7 @@ async def text_msg(update, context):
                 ])
             )
             return
-        
+
         urls = {
             'num': f'https://thanksfor100user.vercel.app/num?number={v}',
             'vahan': f'https://priyanshu-pied-xi.vercel.app/api/vahan?rc={v}&format=card',
@@ -546,13 +611,12 @@ async def text_msg(update, context):
                     text = await r.text()
                     text = clean_response(text)
                     text = add_watermark(text)
-                    
-                    # deduct credit
+
                     deduct_credits(uid, LOOKUP_COST, f'Lookup: {lookup_type}')
                     new_balance = get_credits(uid)
-                    
+
                     text += f"\n\n💳 Credits Left: {new_balance}"
-                    
+
                     await update.message.reply_text(
                         text[:4000],
                         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('⬅️ Back', callback_data='home')]])
@@ -577,8 +641,7 @@ async def admin(update, context):
     if q.from_user.id != ADMIN_ID:
         return
     await q.edit_message_text(
-        f'👑 Admin Panel\n\n'
-        f'👥 Total Users: {user_count()}',
+        f'👑 Admin Panel\n\nTotal Users: {user_count()}',
         reply_markup=admin_kb()
     )
 
@@ -620,14 +683,14 @@ async def stats(update, context):
     await q.answer()
     if q.from_user.id != ADMIN_ID:
         return
-    
+
     c = db_conn()
     cur = c.cursor()
     cur.execute('SELECT SUM(credits) AS total FROM users')
     total_credits = cur.fetchone()['total'] or 0
     cur.close()
     c.close()
-    
+
     await q.edit_message_text(
         f'📊 Bot Statistics\n\n'
         f'👥 Total Users: {user_count()}\n'
@@ -636,7 +699,7 @@ async def stats(update, context):
     )
 
 
-# ==================== ADD CREDITS (ADMIN) ====================
+# ==================== ADD CREDITS START ====================
 async def addcredits_start(update, context):
     q = update.callback_query
     await q.answer()
@@ -645,92 +708,18 @@ async def addcredits_start(update, context):
     context.user_data['addcredits_user'] = None
     context.user_data['addcredits_amount'] = None
     context.user_data['addcredits_step'] = 'user'
-    
+
     await q.edit_message_text(
         '➕ Add Credits\n\n'
         'Step 1: Send the user ID or username (with @) jisko credit add karna hai.\n\n'
         'Example:\n'
-        '• `123456789` (user ID)\n'
-        '• `@sumit123` (username)',
-        parse_mode='Markdown',
+        '• 123456789 (user ID)\n'
+        '• @sumit123 (username)\n\n'
+        'Cancel karna ho to /start bhejo.',
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton('❌ Cancel', callback_data='admin')]
         ])
     )
-
-
-async def addcredits_process(update, context, text):
-    """Handle admin's add-credits flow"""
-    step = context.user_data.get('addcredits_step')
-    
-    if step == 'user':
-        u = find_user_by_username_or_id(text)
-        if not u:
-            await update.message.reply_text(
-                '❌ User not found. Try again or send another ID/username.\n\n'
-                'Cancel karna ho to: /start',
-            )
-            return
-        
-        context.user_data['addcredits_user'] = u['user_id']
-        context.user_data['addcredits_step'] = 'amount'
-        
-        await update.message.reply_text(
-            f"✅ User found:\n\n"
-            f"👤 {u['first_name'] or ''} {u['last_name'] or ''}\n"
-            f"📛 @{u['username'] or 'no_username'}\n"
-            f"🆔 {u['user_id']}\n"
-            f"💰 Current Credits: {u['credits']}\n\n"
-            f"Step 2: Send the amount of credits to add.\n"
-            f"Example: `50` or `100`",
-            parse_mode='Markdown'
-        )
-        return
-    
-    if step == 'amount':
-        try:
-            amount = int(text.strip())
-            if amount <= 0 or amount > 100000:
-                raise ValueError()
-        except ValueError:
-            await update.message.reply_text('❌ Invalid amount. Send a number between 1 and 100000.')
-            return
-        
-        uid = context.user_data['addcredits_user']
-        add_credits(uid, amount, f'Added by admin', added_by=ADMIN_ID)
-        
-        u = get_user(uid)
-        uname = f"@{u['username']}" if u['username'] else "no_username"
-        
-        await update.message.reply_text(
-            f"✅ Credits Added\n\n"
-            f"👤 {u['first_name'] or ''} {u['last_name'] or ''}\n"
-            f"📛 {uname}\n"
-            f"🆔 {uid}\n"
-            f"➕ Added: {amount}\n"
-            f"💰 New Balance: {u['credits']}\n\n"
-            f"User ko notification bhej diya.",
-            reply_markup=admin_kb()
-        )
-        
-        # notify user
-        try:
-            await context.bot.send_message(
-                uid,
-                f"💰 Credits Added!\n\n"
-                f"➕ {amount} credits added to your wallet.\n"
-                f"💳 New Balance: {u['credits']}\n\n"
-                f"Use /start to access services.",
-                reply_markup=kb(uid)
-            )
-        except Exception:
-            pass
-        
-        # reset state
-        context.user_data['addcredits_step'] = None
-        context.user_data['addcredits_user'] = None
-        context.user_data['addcredits_amount'] = None
-        return
 
 
 # ==================== CALLBACKS ====================
